@@ -50,7 +50,7 @@ def find_cut(first_diff_abs, gap):
     the_max[d2_1 < d2_3] = d2_3[d2_1 < d2_3]
     cut_points = np.append(np.append(0, idx[the_max > gap]), len(first_diff_abs))
 
-    return cut_points
+    return cut_points, idx
 
 
 def cut_plot(data, cut_points):   # 之后再看看是否需要保存
@@ -68,8 +68,48 @@ def get_label(data, cut_points):
     return data
 
 
+def get_slice_feature(data):
+    tmp = np.zeros(data.shape[0])
+    tmp[idx] = 1
+    data['idx'] = tmp
+
+    indexs = np.unique(data['cut_points'])
+
+    length = []
+    for index in indexs:
+        length.append(np.sum(data['cut_points'] == index))
+
+    mean_ia = []
+    for index in indexs:
+        tmp = np.mean(data['Ia'][data['cut_points'] == index])
+        mean_ia.append(tmp)
+
+    peak_count = []
+    for index in indexs:
+        tmp = np.sum(data['idx'][data['cut_points'] == index])
+        peak_count.append(tmp)
+
+    accumulate_step = []
+    for index in indexs:
+        tmp = data['Ia'][data['cut_points'] == index].values
+        d1 = tmp[:-1]
+        d2 = tmp[1:]
+        step = np.sum(np.abs(d2 - d1))
+        accumulate_step.append(step)
+
+    slice_feature = pd.DataFrame({'indexs': indexs,
+                                  'length': length,
+                                  'mean_ia': mean_ia,
+                                  'peak_count': peak_count,
+                                  'accumulate_step': accumulate_step},index=indexs)
+    slice_feature['peak_count_ave'] = slice_feature['peak_count'] / slice_feature['length']
+    slice_feature['accumulate_step_ave'] = slice_feature['accumulate_step'] / slice_feature['length']
+
+    return slice_feature
+
+
 if __name__ == '__main__':
-    df_raw = pd.read_csv(r'./10.9.129.79.csv')
+    df_raw = pd.read_csv(r'./10.19.129.38.csv')
     data_1 = load_data(df_raw)
     data_2 = fillin_missvalue(data_1)
     data = fillin_missvalue(data_2)
@@ -77,46 +117,34 @@ if __name__ == '__main__':
     data.reset_index(inplace=True, drop=True)
     first_diff_abs = abs(data['Ia'].diff())
 
-    cut_points = find_cut(first_diff_abs, 600)
+    cut_points, idx = find_cut(first_diff_abs, 600)
     data = get_label(data, cut_points)
 
+    slice_feature = get_slice_feature(data)
+
+
     cut_plot(data, cut_points)
+    # 这块切的时候可以加窗来解决连续递增的情况
 
-#---------------------------------------------
-dtw??
+from sklearn.cluster import KMeans
 
-from nltk.metrics.distance import edit_distance
-def dtw(x, y, dist):
-    """
-    Computes Dynamic Time Warping (DTW) of two sequences.
-    :param array x: N1*M array
-    :param array y: N2*M array
-    :param func dist: distance used as cost measure
-    Returns the minimum distance, the cost matrix, the accumulated cost matrix, and the wrap path.
-    """
-    assert len(x)
-    assert len(y)
-    r, c = len(x), len(y)
-    D0 = np.zeros((r + 1, c + 1))
-    D0[0, 1:] = np.inf
-    D0[1:, 0] = np.inf
-    D1 = D0[1:, 1:] # view
-    for i in range(r):
-        for j in range(c):
-            D1[i, j] = dist(x[i], y[j])
-    C = D1.copy()
-    for i in range(r):
-        for j in range(c):
-            D1[i, j] += min(D0[i, j], D0[i, j+1], D0[i+1, j])
-    if len(x)==1:
-        path = zeros(len(y)), range(len(y))
-    elif len(y) == 1:
-        path = range(len(x)), zeros(len(x))
-    else:
-        path = _traceback(D0)
-    return D1[-1, -1] / sum(D1.shape), C, D1, path
+kmean = KMeans(n_clusters=3)
+kmean.fit(np.array(slice_feature[['peak_count_ave']]).reshape(-1, 1))
+slice_feature['first_labels'] = kmean.labels_
 
-x = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-y = np.array([4, 5, 6, 0, 1, 2, 7, 8, 9, 3])
+first_labels = np.zeros(data.shape[0])
 
-dist, cost, acc, path = dtw.dtw(x.reshape(-1, 1), y.reshape(-1, 1), edit_distance)
+label_1 = slice_feature.index[slice_feature['first_labels'] == 1]
+for i in label_1:
+    first_labels[data['cut_points'] == i] = 1
+data['first_labels'] = first_labels
+
+
+
+plt.scatter(data.loc[data['first_labels'] == 0, 'TimeStr'].values,
+            data.loc[data['first_labels'] == 0, 'Ia'].values,
+            color='g', s=2)
+plt.scatter(data.loc[data['first_labels'] == 1, 'TimeStr'].values,
+            data.loc[data['first_labels'] == 1, 'Ia'].values,
+            color='r', s=2)
+plt.xlim(data.TimeStr.min(), data.TimeStr.max())
