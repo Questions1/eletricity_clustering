@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.signal as signal
+from sklearn.cluster import KMeans
+
 
 def load_data(df_raw):
     data = df_raw[['TimeStr', 'Ia']].copy()
@@ -107,9 +109,32 @@ def get_slice_feature(data):
 
     return slice_feature
 
+def cluster_work_others(data, slice_feature, n=2):  # n indicates the number of classes
+    kmean = KMeans(n_clusters = n)
+    kmean.fit(np.array(slice_feature[['peak_count_ave']]).reshape(-1, 1))
+    slice_feature['first_labels'] = kmean.labels_
+
+    first_labels = np.zeros(data.shape[0])
+
+    label_1 = slice_feature.index[slice_feature['first_labels'] == 1]
+    for i in label_1:
+        first_labels[data['cut_points'] == i] = 1
+    data['first_labels'] = first_labels
+
+    plt.scatter(data.loc[data['first_labels'] == 0, 'TimeStr'].values,
+                data.loc[data['first_labels'] == 0, 'Ia'].values,
+                color='g', s=2)
+    plt.scatter(data.loc[data['first_labels'] == 1, 'TimeStr'].values,
+                data.loc[data['first_labels'] == 1, 'Ia'].values,
+                color='r', s=2)
+    plt.xlim(data.TimeStr.min(), data.TimeStr.max())
+
+    return data
+
+
 
 if __name__ == '__main__':
-    df_raw = pd.read_csv(r'./10.19.129.38.csv')
+    df_raw = pd.read_csv(r'./10.15.203.11.csv')
     data_1 = load_data(df_raw)
     data_2 = fillin_missvalue(data_1)
     data = fillin_missvalue(data_2)
@@ -122,29 +147,14 @@ if __name__ == '__main__':
 
     slice_feature = get_slice_feature(data)
 
+    data = cluster_work_others(data, slice_feature, n=2)
 
     cut_plot(data, cut_points)
     # 这块切的时候可以加窗来解决连续递增的情况
 
-from sklearn.cluster import KMeans
-
-kmean = KMeans(n_clusters=3)
-kmean.fit(np.array(slice_feature[['peak_count_ave']]).reshape(-1, 1))
-slice_feature['first_labels'] = kmean.labels_
-
-first_labels = np.zeros(data.shape[0])
-
-label_1 = slice_feature.index[slice_feature['first_labels'] == 1]
-for i in label_1:
-    first_labels[data['cut_points'] == i] = 1
-data['first_labels'] = first_labels
 
 
 
-plt.scatter(data.loc[data['first_labels'] == 0, 'TimeStr'].values,
-            data.loc[data['first_labels'] == 0, 'Ia'].values,
-            color='g', s=2)
-plt.scatter(data.loc[data['first_labels'] == 1, 'TimeStr'].values,
-            data.loc[data['first_labels'] == 1, 'Ia'].values,
-            color='r', s=2)
-plt.xlim(data.TimeStr.min(), data.TimeStr.max())
+
+
+
