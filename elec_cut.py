@@ -38,7 +38,7 @@ def fillin_missvalue(data):
 
 
 def find_cut(first_diff_abs, gap):
-    idx, _ = signal.find_peaks(first_diff_abs, height=np.max(first_diff_abs) * 0.05)
+    idx, _ = signal.find_peaks(first_diff_abs, height=np.max(first_diff_abs) * 0.03)
     idx_new = np.append(np.append(0, idx), len(first_diff_abs))
 
     d1 = idx_new[:-2]
@@ -116,30 +116,52 @@ def get_slice_feature(data):
     return slice_feature
 
 
-def cluster_work_others(data, slice_feature, features, n):  # n indicates the number of classes
-    kmean = KMeans(n_clusters=n)
-    kmean.fit(slice_feature[features])
-    slice_feature['first_labels'] = kmean.labels_
+def cluster_work_others(data, slice_feature, feature):
 
-    first_labels = np.zeros(data.shape[0])
+    '''
+    Cluster the cut electricity time series according slice_feature, then tag the labels to
+    data(add a label column) and return.
 
-    labels = np.unique(kmean.labels_)
-    for label in labels:
-        label_x = slice_feature.index[slice_feature['first_labels'] == label]
-        for i in label_x:
-            first_labels[data['cut_points'] == i] = label
-    data['first_labels'] = first_labels
+    :param data: One of the input data.
+    :param slice_feature: One of the input data.
+    :param feature: The features used for clustering, type:list.
+    :param n: The number of classes.
+    :return: Original data with one column added: clustering label.
+    '''
+    label_name = '%s_label' % feature
 
-    for label in labels:
-        plt.scatter(data.loc[data['first_labels'] == label, 'TimeStr'].values,
-                    data.loc[data['first_labels'] == label, 'Ia'].values, s=2)
-        plt.xlim(data.TimeStr.min(), data.TimeStr.max())
+    kmean = KMeans(n_clusters=2)
+    kmean.fit(slice_feature[[feature]])
+
+    center_0 = np.mean(slice_feature[feature][kmean.labels_ == 0])
+    center_1 = np.mean(slice_feature[feature][kmean.labels_ == 1])
+    if center_0 > center_1:
+        tmp = np.abs(kmean.labels_ - 1)
+        slice_feature[label_name] = tmp
+    else:
+        slice_feature[label_name] = kmean.labels_
+
+    the_labels = np.zeros(data.shape[0])
+
+    label_x = slice_feature.index[slice_feature[label_name] == 1]
+    for i in label_x:
+        the_labels[data['cut_points'] == i] = 1
+    data[label_name] = the_labels
 
     return data
 
 
+def plot_cluster(data):
+    pass
+    labels = np.unique(data['sum_label'])
+    for label in labels:
+        plt.scatter(data.index[data['sum_label'] == label].values,
+                    data.loc[data['sum_label'] == label, 'Ia'].values, s=2)
+        plt.vlines(cut_points, 0, np.max(data['Ia']), linewidth=0.5, color='g')
+
+
 if __name__ == '__main__':
-    df_raw = pd.read_csv(r'./10.9.129.79.csv')
+    df_raw = pd.read_csv(r'./10.9.129.96.csv')
     data_1 = load_data(df_raw)
     data_2 = fillin_missvalue(data_1)
     data = fillin_missvalue(data_2)
@@ -149,13 +171,21 @@ if __name__ == '__main__':
 
     cut_points, idx = find_cut(first_diff_abs, 300)
     data = get_label(data, cut_points)
-    cut_plot(data, cut_points)
+
+    #cut_plot(data, cut_points)
 
     slice_feature = get_slice_feature(data)
 
-    data = cluster_work_others(data, slice_feature,
-                               ['var', 'peak_count_ave', 'accumulate_step_ave'],
-                               n=2)  # ['var', 'peak_count_ave', 'accumulate_step_ave']
+    features = ['var', 'peak_count_ave', 'accumulate_step_ave']
+    label_names = ['%s_label' % x for x in features]
+    for feature in features:
+        data = cluster_work_others(data, slice_feature, feature)
+    sum_label = np.sum(data[label_names], axis=1)
+    sum_label[sum_label > 0] = 1
+    data['sum_label'] = sum_label
+
+    plot_cluster(data)
+
     # 这块切的时候可以加窗来解决连续递增的情况
 
 
