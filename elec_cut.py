@@ -99,42 +99,47 @@ def get_slice_feature(data):
         step = np.sum(np.abs(d2 - d1))
         accumulate_step.append(step)
 
+    var = []
+    for index in indexs:
+        tmp = np.var(data['Ia'][data['cut_points'] == index])
+        var.append(tmp)
+
     slice_feature = pd.DataFrame({'indexs': indexs,
                                   'length': length,
                                   'mean_ia': mean_ia,
                                   'peak_count': peak_count,
-                                  'accumulate_step': accumulate_step},index=indexs)
+                                  'accumulate_step': accumulate_step,
+                                  'var': var}, index=indexs)
     slice_feature['peak_count_ave'] = slice_feature['peak_count'] / slice_feature['length']
     slice_feature['accumulate_step_ave'] = slice_feature['accumulate_step'] / slice_feature['length']
 
     return slice_feature
 
-def cluster_work_others(data, slice_feature, n=2):  # n indicates the number of classes
-    kmean = KMeans(n_clusters = n)
-    kmean.fit(np.array(slice_feature[['peak_count_ave']]).reshape(-1, 1))
+
+def cluster_work_others(data, slice_feature, features, n):  # n indicates the number of classes
+    kmean = KMeans(n_clusters=n)
+    kmean.fit(slice_feature[features])
     slice_feature['first_labels'] = kmean.labels_
 
     first_labels = np.zeros(data.shape[0])
 
-    label_1 = slice_feature.index[slice_feature['first_labels'] == 1]
-    for i in label_1:
-        first_labels[data['cut_points'] == i] = 1
+    labels = np.unique(kmean.labels_)
+    for label in labels:
+        label_x = slice_feature.index[slice_feature['first_labels'] == label]
+        for i in label_x:
+            first_labels[data['cut_points'] == i] = label
     data['first_labels'] = first_labels
 
-    plt.scatter(data.loc[data['first_labels'] == 0, 'TimeStr'].values,
-                data.loc[data['first_labels'] == 0, 'Ia'].values,
-                color='g', s=2)
-    plt.scatter(data.loc[data['first_labels'] == 1, 'TimeStr'].values,
-                data.loc[data['first_labels'] == 1, 'Ia'].values,
-                color='r', s=2)
-    plt.xlim(data.TimeStr.min(), data.TimeStr.max())
+    for label in labels:
+        plt.scatter(data.loc[data['first_labels'] == label, 'TimeStr'].values,
+                    data.loc[data['first_labels'] == label, 'Ia'].values, s=2)
+        plt.xlim(data.TimeStr.min(), data.TimeStr.max())
 
     return data
 
 
-
 if __name__ == '__main__':
-    df_raw = pd.read_csv(r'./10.15.203.11.csv')
+    df_raw = pd.read_csv(r'./10.9.129.79.csv')
     data_1 = load_data(df_raw)
     data_2 = fillin_missvalue(data_1)
     data = fillin_missvalue(data_2)
@@ -142,14 +147,15 @@ if __name__ == '__main__':
     data.reset_index(inplace=True, drop=True)
     first_diff_abs = abs(data['Ia'].diff())
 
-    cut_points, idx = find_cut(first_diff_abs, 600)
+    cut_points, idx = find_cut(first_diff_abs, 300)
     data = get_label(data, cut_points)
+    cut_plot(data, cut_points)
 
     slice_feature = get_slice_feature(data)
 
-    data = cluster_work_others(data, slice_feature, n=2)
-
-    cut_plot(data, cut_points)
+    data = cluster_work_others(data, slice_feature,
+                               ['var', 'peak_count_ave', 'accumulate_step_ave'],
+                               n=2)  # ['var', 'peak_count_ave', 'accumulate_step_ave']
     # 这块切的时候可以加窗来解决连续递增的情况
 
 
