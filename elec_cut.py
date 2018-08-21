@@ -1,4 +1,4 @@
-import os
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -110,8 +110,7 @@ def get_slice_feature(data):
         p_10 = np.percentile(data['Ia'][data['cut_points'] == index], 20)
         iqr.append(p_90 - p_10)
 
-    slice_feature = pd.DataFrame({'indexs': indexs,
-                                  'length': length,
+    slice_feature = pd.DataFrame({'length': length,
                                   'mean_ia': mean_ia,
                                   'peak_count': peak_count,
                                   'accumulate_step': accumulate_step,
@@ -123,7 +122,17 @@ def get_slice_feature(data):
     return slice_feature
 
 
-def labeling_slice_feature(slice_feature, features):
+def labeling_slice_feature(slice_feature, features, times, vote):
+    '''
+    Label the slice_feature data.frame with outcomes of KMeans clustering.
+
+    Note:'times' and 'vote' paras are closely related. (1, 1)|(2, 0.5)
+    :param slice_feature: input data.
+    :param features: the features used for KMeans clustering.
+    :param times: this function will be used twice.
+    :param vote: vote the outcomes of using feature for KMeans.
+    :return: labeled_slice_feature
+    '''
     labeled_slice_feature = slice_feature.copy()
     for feature in features:
         label_name = '%s_label' % feature
@@ -141,29 +150,60 @@ def labeling_slice_feature(slice_feature, features):
 
     label_names = ['%s_label' % x for x in features]
     slice_sum_label = np.sum(labeled_slice_feature[label_names], axis=1)
-    slice_sum_label[slice_sum_label > 0] = 1
+    if times == 1:
+        slice_sum_label[slice_sum_label > 0] = 1
+    elif times == 2:
+        slice_sum_label[slice_sum_label < vote * len(features)] = 0
+        slice_sum_label[slice_sum_label >= vote * len(features)] = 1
+    else:
+        print('error')
     labeled_slice_feature['slice_sum_label'] = slice_sum_label
 
     return labeled_slice_feature
 
 
-def cluster_work_others(data, labeled_slice_feature):
+def post_cluster(data, labeled_slice_feature):
+    labels = np.unique(labeled_slice_feature['slice_sum_label'])
     the_labels = np.zeros(data.shape[0])
 
-    label_x = labeled_slice_feature.index[labeled_slice_feature['slice_sum_label'] == 1]
-    for i in label_x:
-        the_labels[data['cut_points'] == i] = 1
+    for label in labels:
+        label_x = labeled_slice_feature.index[labeled_slice_feature['slice_sum_label'] == label]
+        for i in label_x:
+            the_labels[data['cut_points'] == i] = label
     data['sum_label'] = the_labels
 
     return data
 
 
 def plot_cluster(data):
-    labels = np.unique(data['sum_label'])
-    for label in labels:
+    labels = np.sort(np.unique(data['sum_label']))
+    if len(labels) == 2:
+        colors = ['grey', 'blue']
+    elif len(labels) == 3:
+        colors = ['grey', 'red', 'blue']
+    else:
+        print('error')
+    for i in range(len(labels)):
+        label = labels[i]
         plt.scatter(data.index[data['sum_label'] == label].values,
-                    data.loc[data['sum_label'] == label, 'Ia'].values, s=2)
+                    data.loc[data['sum_label'] == label, 'Ia'].values,
+                    s=2, color=colors[i])
         plt.vlines(cut_points, 0, np.max(data['Ia']), linewidth=0.5, color='g')
+    plt.show()
+
+
+def post_cluster_2(data, labeled_slice_feature, times, vote):
+    rest_slice_feature = labeled_slice_feature.loc[labeled_slice_feature['slice_sum_label'] == 0, features]
+    rest_labeled_slice_feature = labeling_slice_feature(rest_slice_feature, features, times, vote)
+
+    label_1 = labeled_slice_feature[['slice_sum_label']]
+    label_2 = rest_labeled_slice_feature[['slice_sum_label']]
+    label_12 = pd.merge(label_1, label_2, how='outer', left_index=True, right_index=True)
+    label_12 = label_12.fillna(1)
+    slice_sum_label = np.sum(label_12, axis=1)
+    labeled_slice_feature['slice_sum_label'] = slice_sum_label
+
+    return post_cluster(data, labeled_slice_feature)
 
 
 if __name__ == '__main__':
@@ -182,14 +222,12 @@ if __name__ == '__main__':
     features = ['var', 'peak_count_ave', 'accumulate_step_ave', 'iqr']
 
     slice_feature = get_slice_feature(data)
-    labeled_slice_feature = labeling_slice_feature(slice_feature, features)
-    data = cluster_work_others(data, labeled_slice_feature)
+    labeled_slice_feature = labeling_slice_feature(slice_feature, features, 1, 1)
+    data = post_cluster(data, labeled_slice_feature)
     plot_cluster(data)
 
-
-
-
-
+    data_2 = post_cluster_2(data, labeled_slice_feature, 2, 0.5)
+    plot_cluster(data_2)
 
 
 
