@@ -133,6 +133,9 @@ def labeling_slice_feature(slice_feature, features, times, vote):
     :param vote: vote the outcomes of using feature for KMeans.
     :return: labeled_slice_feature
     '''
+    if slice_feature.shape[0] < 2:
+        print('_'*50 + 'stop')
+        return
     labeled_slice_feature = slice_feature.copy()
     for feature in features:
         label_name = '%s_label' % feature
@@ -175,6 +178,20 @@ def post_cluster(data, labeled_slice_feature):
     return data
 
 
+def post_cluster_2(data, labeled_slice_feature, times, vote):
+    rest_slice_feature = labeled_slice_feature.loc[labeled_slice_feature['slice_sum_label'] == 0, features]
+    rest_labeled_slice_feature = labeling_slice_feature(rest_slice_feature, features, times, vote)
+
+    label_1 = labeled_slice_feature[['slice_sum_label']]
+    label_2 = rest_labeled_slice_feature[['slice_sum_label']]
+    label_12 = pd.merge(label_1, label_2, how='outer', left_index=True, right_index=True)
+    label_12 = label_12.fillna(1)
+    slice_sum_label = np.sum(label_12, axis=1)
+    labeled_slice_feature['slice_sum_label'] = slice_sum_label
+
+    return post_cluster(data, labeled_slice_feature)
+
+
 def plot_cluster(data):
     labels = np.sort(np.unique(data['sum_label']))
     if len(labels) == 2:
@@ -192,26 +209,36 @@ def plot_cluster(data):
     plt.show()
 
 
-def post_cluster_2(data, labeled_slice_feature, times, vote):
-    rest_slice_feature = labeled_slice_feature.loc[labeled_slice_feature['slice_sum_label'] == 0, features]
-    rest_labeled_slice_feature = labeling_slice_feature(rest_slice_feature, features, times, vote)
+def box(data_2, labeled_slice_feature):
+    data_3 = data_2.copy()
+    grey_indexs = labeled_slice_feature.index[labeled_slice_feature['slice_sum_label'] == 0]
+    data_3_Ia = data_3['Ia'].copy()
+    for grey_index in grey_indexs:
+        tmp = data_3_Ia[data_3['cut_points'] == grey_index]
+        Q1 = np.percentile(tmp, 25)
+        Q2 = np.percentile(tmp, 50)
+        Q3 = np.percentile(tmp, 75)
+        IQR = Q3 - Q1
+        up_bound = Q3 + IQR * 1.5
+        low_bound = Q1 - IQR * 1.5
+        out_index = (tmp > up_bound) | (tmp < low_bound)
+        tmp[out_index] = Q2
+        data_3_Ia[data_2['cut_points'] == grey_index] = tmp
+    data_3['Ia'] = data_3_Ia
+    return data_3
 
-    label_1 = labeled_slice_feature[['slice_sum_label']]
-    label_2 = rest_labeled_slice_feature[['slice_sum_label']]
-    label_12 = pd.merge(label_1, label_2, how='outer', left_index=True, right_index=True)
-    label_12 = label_12.fillna(1)
-    slice_sum_label = np.sum(label_12, axis=1)
-    labeled_slice_feature['slice_sum_label'] = slice_sum_label
 
-    return post_cluster(data, labeled_slice_feature)
-
-
+##
 if __name__ == '__main__':
-    df_raw = pd.read_csv(r'./10.15.203.11.csv')
+    ip_list = ['10.9.129.31', '10.9.129.30',
+               # '10.9.129.175',
+               '10.9.129.170',
+               '10.9.129.171', '10.9.129.167']
+    # 10.9.129.175的数据全是0
+    df_raw = pd.read_csv(r'./%s.csv' % ip_list[0])
     data_1 = load_data(df_raw)
     data_2 = fillin_missvalue(data_1, 10)
     data = fillin_missvalue(data_2, 10)
-
     data.reset_index(inplace=True, drop=True)
     first_diff_abs = abs(data['Ia'].diff())
 
@@ -227,7 +254,7 @@ if __name__ == '__main__':
     plot_cluster(data)
 
     data_2 = post_cluster_2(data, labeled_slice_feature, 2, 0.5)
-    plot_cluster(data_2)
-
+    data_3 = box(data_2, labeled_slice_feature)
+    plot_cluster(data_3)
 
 
