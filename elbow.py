@@ -31,6 +31,7 @@ def get_elbow(distance):
     a_2 = pd.Series(distance[:-1])
 
     tmp = a_2 / a_1
+    tmp[tmp < 1] = np.inf
     return tmp.values.argmax() + 2
 
 

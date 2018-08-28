@@ -70,12 +70,13 @@ def get_label(data, cut_points):
     """
     给切好段的时间序列段按照顺序打上类别标记0, 1, 2, ...
     """
+    data_new = data.copy()
     tmp = []  # 生成一段标签，用来表示所属的段
     for i in range(len(cut_points) - 1):
         tmp[cut_points[i]:cut_points[i + 1]] = [i] * (cut_points[i + 1] - cut_points[i])
-    data['cut_points'] = tmp
+    data_new['cut_points'] = tmp
 
-    return data
+    return data_new
 
 
 def get_slice_feature(data, idx):
@@ -212,13 +213,12 @@ def box(data_2, labeled_slice_feature):
     for grey_index in grey_indexs:
         tmp = data_3_Ia[data_3['cut_points'] == grey_index]
         Q1 = np.percentile(tmp, 25)
-        Q2 = np.percentile(tmp, 50)
         Q3 = np.percentile(tmp, 75)
         IQR = Q3 - Q1
         up_bound = Q3 + IQR * 1.5
         low_bound = Q1 - IQR * 1.5
-        out_index = (tmp > up_bound) | (tmp < low_bound)
-        tmp[out_index] = Q2
+        tmp[tmp > up_bound] = up_bound
+        tmp[tmp < low_bound] = low_bound
         data_3_Ia[data_2['cut_points'] == grey_index] = tmp
     data_3['Ia'] = data_3_Ia
     return data_3
@@ -297,30 +297,37 @@ def get_elbow(distance):
     a_2 = pd.Series(distance[:-1])
 
     tmp = a_2 / a_1
-    return tmp.values.argmax() + 2
+
+    tmp_1 = pd.Series(tmp[1:].values)
+    tmp_2 = pd.Series(tmp[:-1].values)
+
+    tmp2 = tmp_2 / tmp_1
+    return tmp2.values.argmax() + 2
 
 
-def use_gaussian(data_4, best_n_cluster):
+def use_gaussian(data_4, grey, best_n_cluster, work_mean):
     """
     使用GMM对灰色的点进行聚类
     """
+    grey['Ia'][grey['Ia'] > work_mean] = np.mean(grey['Ia'])
     clf = mixture.GaussianMixture(n_components=best_n_cluster, covariance_type='full')
     clf.fit(np.array(grey).reshape(-1, 1))
     predicted = clf.predict(np.array(grey).reshape(-1, 1))
     data_5 = data_4.copy()
     the_label = data_5['sum_label'].copy()
     the_label[the_label > 0] = best_n_cluster
-    the_label[the_label == 0] = predicted
+    the_label[(the_label == 0) & (data_5['Ia'] > 0)] = predicted
+    the_label[(the_label == 0) & (data_5['Ia'] == 0)] = -1
     data_5['sum_label'] = the_label
 
-    return data_5, clf.means_, clf.covariances_, clf.weights_
+    return data_5, clf.means_, clf.covariances_, clf.weights_, clf
 
 
 def plot_gaussian(data):
     """
     使用GMM聚类结束之后，画出聚类的结果
     """
-    labels = np.sort(np.unique(data_5['sum_label']))
+    labels = np.sort(np.unique(data['sum_label']))
     plt.scatter(data.index[data['sum_label'] == best_n_cluster].values,
                 data.loc[data['sum_label'] == best_n_cluster, 'Ia'].values,
                 s=2, color='grey')
@@ -332,17 +339,18 @@ def plot_gaussian(data):
     plt.vlines(cut_points, 0, np.max(data['Ia']), linewidth=0.5, color='g')
 
 
-def get_idle(data_5, means_, m):
+def get_idle(data, means_, m):
     """
     根据参数m动态地调整对待机的识别
     """
     tmp = pd.Series(means_.reshape(1, -1)[0]).rank()
     idle_labels = tmp.index.values[tmp <= m]
-    data_6 = data_5.copy()
+    data_6 = data.copy()
     sum_label = data_6['sum_label'].copy()
 
-    sum_label[list(map(lambda x: x in idle_labels, data_6['sum_label']))] = 0
-    sum_label[list(map(lambda x: x not in idle_labels, data_6['sum_label']))] = 1
+    sum_label[list(map(lambda x: x in idle_labels, data_6['sum_label']))] = 1
+    sum_label[list(map(lambda x: x not in idle_labels, data_6['sum_label']))] = 2
+    sum_label[data_6['Ia'] == 0] = 0
     data_6['sum_label'] = sum_label
 
     return data_6
@@ -352,12 +360,13 @@ def plot_final(data):
     """
     画出根据m动态调整后的图
     """
+    colors = ['grey', 'green', 'red', 'blue', 'pink', 'yellow', 'cyan', 'orange', 'black']
     labels = np.sort(np.unique(data['sum_label']))
     for i in range(len(labels)):
         label = labels[i]
         plt.scatter(data.index[data['sum_label'] == label].values,
                     data.loc[data['sum_label'] == label, 'Ia'].values,
-                    s=2)
+                    s=2, color=colors[np.int(label)])
     plt.vlines(cut_points, 0, np.max(data['Ia']), linewidth=0.5, color='g')
 
 
@@ -377,38 +386,51 @@ def get_out_para(means_, covariances_, weights_):
     return out_para, up_thre
 
 
+def predict(data_raw_1, best_n_cluster, up_thre, clf):
+    """
+    利用得到的聚类器(up_thre, clf)对原始数据(未经中值滤波处理)进行分类
+    """
+    label = np.zeros(data_raw_1.shape[0])
+    label[data_raw_1['Ia'] > up_thre] = best_n_cluster
+    left = np.array(data_raw_1['Ia'][data_raw_1['Ia'] <= up_thre]).reshape(-1, 1)
+    label[data_raw_1['Ia'] <= up_thre] = clf.predict(left)
+    data_raw_1['sum_label'] = label
+
+    return data_raw_1
+
+
 ##
 if __name__ == '__main__':
     ip_list = ['10.9.129.31', '10.9.129.30',
                # '10.9.129.175',  # 10.9.129.175的数据全是0
                '10.9.129.170',
                '10.9.129.171', '10.9.129.167',
-               '10.9.129.79', '10.9.130.75']
+               '10.9.129.79', '10.9.130.75', '10.9.129.96']
 
     # 数据预处理
-    df_raw = pd.read_csv(r'./%s.csv' % ip_list[1])
-    data_1 = load_data(df_raw)
-    data_2 = fillin_missvalue(data_1, 10)
-    data = fillin_missvalue(data_2, 10)
-    data.reset_index(inplace=True, drop=True)
-    first_diff_abs = abs(data['Ia'].diff())
+    df_raw = pd.read_csv(r'./%s.csv' % ip_list[0])
+    data_raw_1 = load_data(df_raw)
+    data_raw_2 = fillin_missvalue(data_raw_1, 10)
+    data_raw_3 = fillin_missvalue(data_raw_2, 10)
+    data_raw_3.reset_index(inplace=True, drop=True)
+    first_diff_abs = abs(data_raw_3['Ia'].diff())
 
     # 首先进行切块
     cut_points, idx = find_cut(first_diff_abs, 300, 0.05)
-    data = get_label(data, cut_points)
+    data_0 = get_label(data_raw_3, cut_points)
 
     # 获取特征
     features = ['var', 'peak_count_ave', 'accumulate_step_ave', 'iqr']
-    slice_feature = get_slice_feature(data, idx)
+    slice_feature = get_slice_feature(data_0, idx)
 
     # 第一轮聚类
     labeled_slice_feature = labeling_slice_feature(slice_feature, features, 1, 1)
-    data = post_cluster(data, labeled_slice_feature)
-    plot_cluster(data)
+    data_1 = post_cluster(data_0, labeled_slice_feature)
+    plot_cluster(data_1)
     plt.close()
 
     # 第二轮聚类
-    data_2 = post_cluster_2(data, labeled_slice_feature, 2, 0.5)
+    data_2 = post_cluster_2(data_1, labeled_slice_feature, 2, 0.5)
     data_3 = box(data_2, labeled_slice_feature)
     plot_cluster(data_3)
     plt.close()
@@ -419,12 +441,14 @@ if __name__ == '__main__':
     plt.close()
 
     # 根据"肘部图"获取最佳聚类个数
-    grey = data_4.loc[(data_4['sum_label'] == 0), ['Ia']]
+    grey = data_4.loc[(data_4['sum_label'] == 0) & (data_4['Ia'] > 0), ['Ia']]
     distance, k = get_distance(grey)
+    plt.close()
     best_n_cluster = get_elbow(distance)
 
-    # 使用高斯混合得到聚类中心, 并对数据做出预测, 画出图
-    data_5, means_, covariances_, weights_ = use_gaussian(data_4, best_n_cluster)
+    # 使用高斯混合得到聚类中心, 并对数据做出预测, 画出图, 输出聚类器(up_thre, clf)
+    data_5, means_, covariances_, weights_, clf = use_gaussian(data_4, grey, best_n_cluster, work_mean)
+    out_para, up_thre = get_out_para(means_, covariances_, weights_)
     plot_gaussian(data_5)
     plt.close()
 
@@ -433,6 +457,21 @@ if __name__ == '__main__':
     plot_final(data_6)
     plt.close()
 
-    out_para, up_thre = get_out_para(means_, covariances_, weights_)
+    # 这块存疑
+    up_thre = work_mean
+
+    # 基于聚类器(up_thre, clf)对原始数据(未经中值滤波处理)进行分类
+    data_raw_1_label = predict(data_raw_1, best_n_cluster, up_thre, clf)
+    plot_final(data_raw_1_label)
+    plt.hlines(up_thre, 0, data_raw_1_label.shape[0])
+    plt.close()
+
+    # 下面动态地判断待机的GMM中心, 可以调整get_idle的最后一个参数m，其最大取值为best_n_cluster
+    # 灰色关机，绿色待机，红色工作
+    default_m = np.sum(out_para['means'] < 0.1) + 1
+    data_final = get_idle(data_raw_1_label, means_, m=1)
+    plot_final(data_final)
+    plt.hlines(up_thre, 0, data_final.shape[0])
+
 
 
