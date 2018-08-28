@@ -170,6 +170,9 @@ def labeling_slice_feature(slice_feature, features, times, vote):
 
 
 def post_cluster(data, labeled_slice_feature):
+    """
+    把第一轮根据slice_feature聚类好的结果扩展到data上, 以备画图使用
+    """
     labels = np.unique(labeled_slice_feature['slice_sum_label'])
     the_labels = np.zeros(data.shape[0])
 
