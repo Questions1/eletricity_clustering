@@ -310,6 +310,7 @@ def use_gaussian(data_4, grey, best_n_cluster, work_mean):
     使用GMM对灰色的点进行聚类
     """
     grey['Ia'][grey['Ia'] > work_mean] = np.mean(grey['Ia'])
+    grey['Ia'] = grey['Ia'] + np.random.normal(0, 0.3, len(grey['Ia']))
     clf = mixture.GaussianMixture(n_components=best_n_cluster, covariance_type='full')
     clf.fit(np.array(grey).reshape(-1, 1))
     predicted = clf.predict(np.array(grey).reshape(-1, 1))
@@ -408,7 +409,7 @@ if __name__ == '__main__':
                '10.9.129.79', '10.9.130.75', '10.9.129.96']
 
     # 数据预处理
-    df_raw = pd.read_csv(r'./%s.csv' % ip_list[0])
+    df_raw = pd.read_csv(r'./%s.csv' % ip_list[1])
     data_raw_1 = load_data(df_raw)
     data_raw_2 = fillin_missvalue(data_raw_1, 10)
     data_raw_3 = fillin_missvalue(data_raw_2, 10)
@@ -440,8 +441,11 @@ if __name__ == '__main__':
     plot_cluster(data_4)
     plt.close()
 
-    # 根据"肘部图"获取最佳聚类个数
+    # 根据"肘部图"获取最佳聚类个数, 不包括关机
+    # 因为数据本身是离散的，得手动加一些扰动项
     grey = data_4.loc[(data_4['sum_label'] == 0) & (data_4['Ia'] > 0), ['Ia']]
+    grey['Ia'][grey['Ia'] > work_mean] = np.mean(grey['Ia'])
+    grey['Ia'] = grey['Ia'] + np.random.normal(0, 0.3, len(grey['Ia']))
     distance, k = get_distance(grey)
     plt.close()
     best_n_cluster = get_elbow(distance)
@@ -450,6 +454,7 @@ if __name__ == '__main__':
     data_5, means_, covariances_, weights_, clf = use_gaussian(data_4, grey, best_n_cluster, work_mean)
     out_para, up_thre = get_out_para(means_, covariances_, weights_)
     plot_gaussian(data_5)
+    plt.hlines(out_para['means'], 0, data_5.shape[0])
     plt.close()
 
     # 下面动态地判断待机的GMM中心, 可以调整get_idle的最后一个参数，其最大取值为best_n_cluster
@@ -469,9 +474,7 @@ if __name__ == '__main__':
     # 下面动态地判断待机的GMM中心, 可以调整get_idle的最后一个参数m，其最大取值为best_n_cluster
     # 灰色关机，绿色待机，红色工作
     default_m = np.sum(out_para['means'] < 0.1) + 1
-    data_final = get_idle(data_raw_1_label, means_, m=1)
+    data_final = get_idle(data_raw_1_label, means_, m=2)
     plot_final(data_final)
     plt.hlines(up_thre, 0, data_final.shape[0])
-
-
 
