@@ -305,13 +305,13 @@ def get_elbow(distance):
     return tmp2.values.argmax() + 2
 
 
-def use_gaussian(data_4, grey, best_n_cluster, work_mean):
+def use_km(data_4, grey, best_n_cluster, work_mean):
     """
-    使用GMM对灰色的点进行聚类
+    使用KMeans对灰色的点进行聚类
     """
     grey['Ia'][grey['Ia'] > work_mean] = np.mean(grey['Ia'])
     grey['Ia'] = grey['Ia'] + np.random.normal(0, 0.3, len(grey['Ia']))
-    clf = mixture.GaussianMixture(n_components=best_n_cluster, covariance_type='full')
+    clf = KMeans(n_clusters=best_n_cluster)
     clf.fit(np.array(grey).reshape(-1, 1))
     predicted = clf.predict(np.array(grey).reshape(-1, 1))
     data_5 = data_4.copy()
@@ -321,12 +321,12 @@ def use_gaussian(data_4, grey, best_n_cluster, work_mean):
     the_label[(the_label == 0) & (data_5['Ia'] == 0)] = -1
     data_5['sum_label'] = the_label
 
-    return data_5, clf.means_, clf.covariances_, clf.weights_, clf
+    return data_5, clf.cluster_centers_, clf
 
 
-def plot_gaussian(data):
+def plot_km(data):
     """
-    使用GMM聚类结束之后，画出聚类的结果
+    使用KMeans聚类结束之后，画出聚类的结果
     """
     labels = np.sort(np.unique(data['sum_label']))
     plt.scatter(data.index[data['sum_label'] == best_n_cluster].values,
@@ -371,22 +371,6 @@ def plot_final(data):
     plt.vlines(cut_points, 0, np.max(data['Ia']), linewidth=0.5, color='g')
 
 
-def get_out_para(means_, covariances_, weights_):
-    """
-    把模型参数输出，有两部分：
-
-    一是GMM的模型参数，包括均值、方差、概率
-    二是一个较为宽松的阈值
-    """
-    out_para = pd.DataFrame({'means': means_.reshape(1, -1)[0],
-                             'cov': covariances_.reshape(1, -1)[0],
-                             'alpha': weights_})
-    up_index = out_para['means'].values.argmax()
-    up_thre = out_para.loc[up_index, 'means'] + 3 * out_para.loc[up_index, 'cov']
-
-    return out_para, up_thre
-
-
 def predict(data_raw_1, best_n_cluster, up_thre, clf):
     """
     利用得到的聚类器(up_thre, clf)对原始数据(未经中值滤波处理)进行分类
@@ -409,7 +393,7 @@ if __name__ == '__main__':
                '10.9.129.79', '10.9.130.75', '10.9.129.96']
 
     # 数据预处理
-    df_raw = pd.read_csv(r'./%s.csv' % ip_list[1])
+    df_raw = pd.read_csv(r'./%s.csv' % ip_list[-1])
     data_raw_1 = load_data(df_raw)
     data_raw_2 = fillin_missvalue(data_raw_1, 10)
     data_raw_3 = fillin_missvalue(data_raw_2, 10)
@@ -451,14 +435,14 @@ if __name__ == '__main__':
     best_n_cluster = get_elbow(distance)
 
     # 使用高斯混合得到聚类中心, 并对数据做出预测, 画出图, 输出聚类器(up_thre, clf)
-    data_5, means_, covariances_, weights_, clf = use_gaussian(data_4, grey, best_n_cluster, work_mean)
-    out_para, up_thre = get_out_para(means_, covariances_, weights_)
-    plot_gaussian(data_5)
-    plt.hlines(out_para['means'], 0, data_5.shape[0])
+    data_5, cluster_centers_, clf = use_km(data_4, grey, best_n_cluster, work_mean)
+    up_thre = work_mean
+    plot_km(data_5)
+    plt.hlines(cluster_centers_, 0, data_5.shape[0])
     plt.close()
 
     # 下面动态地判断待机的GMM中心, 可以调整get_idle的最后一个参数，其最大取值为best_n_cluster
-    data_6 = get_idle(data_5, means_, 2)
+    data_6 = get_idle(data_5, cluster_centers_, 2)
     plot_final(data_6)
     plt.close()
 
@@ -473,8 +457,8 @@ if __name__ == '__main__':
 
     # 下面动态地判断待机的GMM中心, 可以调整get_idle的最后一个参数m，其最大取值为best_n_cluster
     # 灰色关机，绿色待机，红色工作
-    default_m = np.sum(out_para['means'] < 0.1) + 1
-    data_final = get_idle(data_raw_1_label, means_, m=2)
+    default_m = np.sum(cluster_centers_ < 0.1) + 1
+    data_final = get_idle(data_raw_1_label, cluster_centers_, m=1)
     plot_final(data_final)
     plt.hlines(up_thre, 0, data_final.shape[0])
 
