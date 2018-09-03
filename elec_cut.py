@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import scipy.signal as signal
 from sklearn.cluster import KMeans
 from sklearn import mixture
+from statsmodels.sandbox.stats import runs
 
 
 def load_data(df_raw):
@@ -88,46 +89,45 @@ def get_slice_feature(data, idx):
     data['idx'] = tmp
 
     indexs = np.unique(data['cut_points'])
-
+    
     length = []
-    for index in indexs:
-        length.append(np.sum(data['cut_points'] == index))
-
     mean_ia = []
-    for index in indexs:
-        tmp = np.mean(data['Ia'][data['cut_points'] == index])
-        mean_ia.append(tmp)
-
     peak_count = []
-    for index in indexs:
-        tmp = np.sum(data['idx'][data['cut_points'] == index])
-        peak_count.append(tmp)
-
     accumulate_step = []
-    for index in indexs:
-        tmp = data['Ia'][data['cut_points'] == index].values
-        d1 = tmp[:-1]
-        d2 = tmp[1:]
-        step = np.sum(np.abs(d2 - d1))
-        accumulate_step.append(step)
-
     var = []
-    for index in indexs:
-        tmp = np.var(data['Ia'][data['cut_points'] == index])
-        var.append(tmp)
-
     iqr = []
     for index in indexs:
-        p_90 = np.percentile(data['Ia'][data['cut_points'] == index], 80)
-        p_10 = np.percentile(data['Ia'][data['cut_points'] == index], 20)
-        iqr.append(p_90 - p_10)
+        rule = (data['cut_points'] == index) & (data['Ia'] != -0.1)
+        if np.sum(rule) == 0:
+            length.append(1)
+            mean_ia.append(0)
+            peak_count.append(0)
+            accumulate_step.append(0)
+            var.append(0)
+            iqr.append(0)
+        else:
+            length.append(np.sum(rule))
+            mean_ia.append(np.mean(data['Ia'][rule]))
+            peak_count.append(np.sum(data['idx'][rule]))
+
+            tmp = data['Ia'][rule].values
+            d1 = tmp[:-1]
+            d2 = tmp[1:]
+            step = np.sum(np.abs(d2 - d1))
+            accumulate_step.append(step)
+
+            var.append(np.var(data['Ia'][rule]))
+
+            p_90 = np.percentile(data['Ia'][rule], 80)
+            p_10 = np.percentile(data['Ia'][rule], 20)
+            iqr.append(p_90 - p_10)
 
     slice_feature = pd.DataFrame({'length': length,
                                   'mean_ia': mean_ia,
                                   'peak_count': peak_count,
                                   'accumulate_step': accumulate_step,
                                   'var': var,
-                                  'iqr':iqr}, index=indexs)
+                                  'iqr': iqr}, index=indexs)
     slice_feature['peak_count_ave'] = slice_feature['peak_count'] / slice_feature['length']
     slice_feature['accumulate_step_ave'] = slice_feature['accumulate_step'] / slice_feature['length']
 
@@ -226,7 +226,7 @@ def box(data_2, labeled_slice_feature):
 
 def split_grey(data_3):
     """
-    把灰色的点按照work_mean在分一下，只对下面的进行GMM聚类
+    把灰色的点按照work_mean再分一下，只对下面的进行GMM聚类
     """
     work_mean = np.mean(data_3.loc[(data_3['sum_label'] > 0), 'Ia'])
 
@@ -295,8 +295,13 @@ def get_elbow(distance):
     """
     a_1 = pd.Series(distance[1:])
     a_2 = pd.Series(distance[:-1])
+    tmp0 = a_1 - a_2
+    if np.argmin(tmp0.values > 0) == 0:
+        number = len(a_1)
+    else:
+        number = np.argmin(tmp0.values > 0)
 
-    tmp = a_2 / a_1
+    tmp = a_2[:number] / a_1[:number]
 
     tmp_1 = pd.Series(tmp[1:].values)
     tmp_2 = pd.Series(tmp[:-1].values)
@@ -347,11 +352,12 @@ def get_idle(data, means_, m):
     tmp = pd.Series(means_.reshape(1, -1)[0]).rank()
     idle_labels = tmp.index.values[tmp <= m]
     data_6 = data.copy()
-    sum_label = data_6['sum_label'].copy()
+    sum_label = np.zeros(data_6.shape[0])
 
     sum_label[list(map(lambda x: x in idle_labels, data_6['sum_label']))] = 1
     sum_label[list(map(lambda x: x not in idle_labels, data_6['sum_label']))] = 2
     sum_label[data_6['Ia'] == 0] = 0
+    sum_label[data_6['Ia'] == -0.1] = -1
     data_6['sum_label'] = sum_label
 
     return data_6
@@ -361,14 +367,18 @@ def plot_final(data):
     """
     画出根据m动态调整后的图
     """
-    colors = ['grey', 'green', 'red', 'blue', 'pink', 'yellow', 'cyan', 'orange', 'black']
+    rule_1 = (data.sum_label.values == 1) | (np.append(data.sum_label[0], data.sum_label.values[:-1]) == 1)
+    vlines_rule = (data.sum_label.diff() != 0) & rule_1
+    vlines = data.index[vlines_rule].values
+    if data.sum_label.values[-1] == 1:
+        vlines = np.append(vlines, data.shape[0])
+    colors = ['grey', 'green', 'red', 'blue', 'pink', 'yellow', 'cyan', 'black', 'orange']
     labels = np.sort(np.unique(data['sum_label']))
-    for i in range(len(labels)):
-        label = labels[i]
+    for label in labels:
         plt.scatter(data.index[data['sum_label'] == label].values,
                     data.loc[data['sum_label'] == label, 'Ia'].values,
                     s=2, color=colors[np.int(label)])
-    plt.vlines(cut_points, 0, np.max(data['Ia']), linewidth=0.5, color='g')
+    plt.vlines(vlines, 0, np.max(data['Ia']), linewidth=0.5, color='g')
 
 
 def get_out_para(means_, covariances_, weights_):
@@ -391,13 +401,56 @@ def predict(data_raw_1, best_n_cluster, up_thre, clf):
     """
     利用得到的聚类器(up_thre, clf)对原始数据(未经中值滤波处理)进行分类
     """
-    label = np.zeros(data_raw_1.shape[0])
-    label[data_raw_1['Ia'] > up_thre] = best_n_cluster
-    left = np.array(data_raw_1['Ia'][data_raw_1['Ia'] <= up_thre]).reshape(-1, 1)
-    label[data_raw_1['Ia'] <= up_thre] = clf.predict(left)
-    data_raw_1['sum_label'] = label
+    data_tmp = data_raw_1.copy()
+    data_tmp.fillna(-0.1, inplace=True)
+    label = np.zeros(data_tmp.shape[0])
+    label[data_tmp['Ia'] > up_thre] = best_n_cluster
+    label[data_tmp['Ia'] == -0.1] = -1
 
-    return data_raw_1
+    left_rule = (data_tmp['Ia'] <= up_thre) & (data_tmp['Ia'] >= 0)
+    left = np.array(data_tmp['Ia'][left_rule]).reshape(-1, 1)
+    label[left_rule] = clf.predict(left)
+    data_tmp['sum_label'] = label
+
+    return data_tmp
+
+
+def five_minutes_judge(data_final, seconds_f_1=60, seconds_1=300):
+    """
+    首先对 "缺失游程" 处理，如果 "缺失游程" 短于seconds_f_1秒，且其前后一样，则按照其前后的游程合并
+
+    然后对 "待机游程" 处理，如果 "待机游程" 短于seconds_1秒，则重新划定为 "工作游程"
+    """
+    state_run = runs.Runs(data_final['sum_label'])
+    run_df = pd.DataFrame({'run_len': state_run.runs,
+                           'run_sign': state_run.runs_sign})
+    run_df.reset_index(inplace=True, drop=True)
+    run_df_f_1 = run_df.query("run_sign == -1")
+    new_run_sign = run_df.run_sign.copy()
+    # 首先对 "缺失游程" 处理
+    short_f_1 = run_df_f_1.index[run_df_f_1.run_len < seconds_f_1]
+    for index in short_f_1:
+        if index == 0:
+            new_run_sign[index] = run_df.run_sign[index + 1]
+        if index == (run_df.shape[0] - 1):
+            new_run_sign[index] = run_df.run_sign[index - 1]
+        if run_df.run_sign[index-1] == run_df.run_sign[index+1]:
+            new_run_sign[index] = run_df.run_sign[index-1]
+
+    # 然后对 "待机游程" 处理
+    run_df_1 = run_df.query("run_sign == 1")
+    short_1 = run_df_1.index[run_df_1.run_len < seconds_1]
+    for index in short_1:
+        new_run_sign[index] = 2
+
+    # 根据游程来还原label
+    sum_label = []
+    for run, length in zip(new_run_sign, run_df.run_len):
+        sum_label.extend([run] * length)
+    data_final_2 = data_final.copy()
+    data_final_2['sum_label'] = sum_label
+
+    return data_final_2
 
 
 ##
@@ -409,10 +462,12 @@ if __name__ == '__main__':
                '10.9.129.79', '10.9.130.75', '10.9.129.96']
 
     # 数据预处理
-    df_raw = pd.read_csv(r'./%s.csv' % ip_list[1])
-    data_raw_1 = load_data(df_raw)
+    df_raw = pd.read_csv('./%s.csv' % ip_list[-1])
+    data_raw_0 = load_data(df_raw)
+    data_raw_1 = fillin_timeseries(data_raw_0)
     data_raw_2 = fillin_missvalue(data_raw_1, 10)
     data_raw_3 = fillin_missvalue(data_raw_2, 10)
+    data_raw_3.fillna(-0.1, inplace=True)
     data_raw_3.reset_index(inplace=True, drop=True)
     first_diff_abs = abs(data_raw_3['Ia'].diff())
 
@@ -466,7 +521,7 @@ if __name__ == '__main__':
     up_thre = work_mean
 
     # 基于聚类器(up_thre, clf)对原始数据(未经中值滤波处理)进行分类
-    data_raw_1_label = predict(data_raw_1, best_n_cluster, up_thre, clf)
+    data_raw_1_label = predict(data_raw_2, best_n_cluster, up_thre, clf)
     plot_final(data_raw_1_label)
     plt.hlines(up_thre, 0, data_raw_1_label.shape[0])
     plt.close()
@@ -474,7 +529,11 @@ if __name__ == '__main__':
     # 下面动态地判断待机的GMM中心, 可以调整get_idle的最后一个参数m，其最大取值为best_n_cluster
     # 灰色关机，绿色待机，红色工作
     default_m = np.sum(out_para['means'] < 0.1) + 1
-    data_final = get_idle(data_raw_1_label, means_, m=2)
+    data_final = get_idle(data_raw_1_label, means_, m=3)
     plot_final(data_final)
     plt.hlines(up_thre, 0, data_final.shape[0])
+    plt.close()
 
+    # 使用5分钟来过滤一下
+    data_final_2 = five_minutes_judge(data_final)
+    plot_final(data_final_2)
