@@ -372,7 +372,7 @@ def plot_final(data):
     vlines = data.index[vlines_rule].values
     if data.sum_label.values[-1] == 1:
         vlines = np.append(vlines, data.shape[0])
-    colors = ['grey', 'green', 'red', 'blue', 'black', 'cyan', 'yellow', 'orange']
+    colors = ['grey', 'green', 'red', 'blue', 'teal', 'cyan', 'yellow', 'black']
     labels = np.sort(np.unique(data['sum_label']))
     for label in labels:
         plt.scatter(data.index[data['sum_label'] == label].values,
@@ -446,7 +446,7 @@ if __name__ == '__main__':
                '10.9.129.79', '10.9.130.75', '10.9.129.96']
 
     # 数据预处理
-    df_raw = pd.read_csv('./%s.csv' % ip_list[-1])
+    df_raw = pd.read_csv('./%s.csv' % ip_list[1])
     data_raw_0 = load_data(df_raw)
     data_raw_1 = fillin_timeseries(data_raw_0)
     data_raw_2 = fillin_missvalue(data_raw_1, 10)
