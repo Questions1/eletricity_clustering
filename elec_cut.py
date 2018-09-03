@@ -372,7 +372,7 @@ def plot_final(data):
     vlines = data.index[vlines_rule].values
     if data.sum_label.values[-1] == 1:
         vlines = np.append(vlines, data.shape[0])
-    colors = ['grey', 'green', 'red', 'blue', 'pink', 'yellow', 'cyan', 'black', 'orange']
+    colors = ['grey', 'green', 'red', 'blue', 'teal', 'cyan', 'yellow', 'black']
     labels = np.sort(np.unique(data['sum_label']))
     for label in labels:
         plt.scatter(data.index[data['sum_label'] == label].values,
