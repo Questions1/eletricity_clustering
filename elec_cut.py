@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy.signal as signal
 from sklearn.cluster import KMeans
+from datetime import datetime
+import statsmodels.nonparametric.api as smnp
 from sklearn import mixture
 from statsmodels.sandbox.stats import runs
 
@@ -437,6 +439,103 @@ def five_minutes_judge(data_final, seconds_f_1=60, seconds_1=300):
     return data_final_2
 
 
+def better_local(peaks, vallys, x_plot):
+    if len(peaks) <= 1:
+        print('One peak')
+        return pd.DataFrame(columns=['x_plot', 'x_density']), np.nan
+    new_vallys = []
+    for i, _ in enumerate(peaks[:-1]):
+        temp = vallys[(vallys > peaks[i]) & (vallys < peaks[i + 1])]
+        new_vallys.append(int(np.min(temp)))
+
+        x_plot = x_plot.reshape(-1)
+        local_minmax = pd.DataFrame({'x': np.concatenate((x_plot[peaks], x_plot[new_vallys])),
+                                     'y': np.concatenate((x_dens[peaks], x_dens[new_vallys]))})
+        local_minmax.sort_values(by='x', inplace=True)
+        local_minmax.reset_index(drop=True, inplace=True)
+
+        return local_minmax
+
+
+def get_sum_label(data_raw_2, local_min, m):
+    final_data = data_raw_2.copy()
+    threshold = local_min[m]
+    sum_label = np.zeros(final_data.shape[0])
+
+    sum_label[(final_data['Ia'] < 0.1)] = 0
+    sum_label[(final_data['Ia'] >= 0.1) & (final_data['Ia'] < threshold)] = 1
+    sum_label[final_data['Ia'] >= threshold] = 2
+    final_data['sum_label'] = sum_label
+
+    return final_data
+
+
+def cal_thre(data_4):
+    '''
+    Calculate threshold
+    Input:
+        data: DataFrame
+            columns: [time, Ia]
+    Output:
+        density_curve:DataFrame
+            columns:
+        standby_thre: float/np.nan
+    '''
+    grey = data_4.loc[(data_4['sum_label'] == 0) & (data_4['Ia'] > 0), ['Ia']]
+    grey['Ia'] = grey['Ia'] + np.random.normal(0, 0.3, len(grey['Ia']))
+    x_density = grey['Ia'].values
+
+    if len(x_density) == 0:
+        print("No data larger than zero!")
+        return pd.DataFrame(columns=['x_plot', 'x_density']), np.nan
+
+    x_density = np.float64(x_density)
+    kde = smnp.KDEUnivariate(x_density)
+    kde.fit(kernel='gau', bw='scott', fft=True, gridsize=100, cut=3.0, clip=(-np.inf, np.inf))
+    x_plot, x_dens = kde.support, kde.density
+    x_dens = np.amax(np.c_[np.zeros_like(x_dens), x_dens], axis=1)
+
+    peaks, p_heights = signal.find_peaks(x_dens, height=0.03 * max(x_dens))
+    vallys, v_heights = signal.find_peaks(-x_dens)
+
+    if len(peaks) <= 1:
+        print('One peak')
+        return pd.DataFrame(columns=['x_plot', 'x_density']), np.nan
+    new_vallys = []
+    for i, _ in enumerate(peaks[:-1]):
+        temp = vallys[(vallys > peaks[i]) & (vallys < peaks[i + 1])]
+        new_vallys.append(int(np.min(temp)))
+
+        x_plot = x_plot.reshape(-1)
+        local_minmax = pd.DataFrame({'x': np.concatenate((x_plot[peaks], x_plot[new_vallys])),
+                                     'y': np.concatenate((x_dens[peaks], x_dens[new_vallys]))})
+        local_minmax.sort_values(by='x', inplace=True)
+        local_minmax.reset_index(drop=True, inplace=True)
+
+        depth_values = []
+
+    for idx in local_minmax[local_minmax['x'].isin(x_plot[new_vallys])].index:
+        if idx == 0:
+            continue
+        dep1 = local_minmax.loc[idx - 1, 'y']
+        dep2 = local_minmax.loc[idx + 1, 'y']
+        dens_vally = local_minmax.loc[idx, 'y']
+        depth_values.append(min(dep1, dep2) - dens_vally)
+
+    depth_values = [item for item in depth_values if item > 0]
+    vally_depth = pd.DataFrame({'vally_Ia': local_minmax[local_minmax['x'].isin(x_plot[new_vallys])].loc[:, 'x'],
+                                'depth': depth_values})
+
+    vally_depth.sort_values(by='depth', ascending=False, inplace=True)
+    vally_depth.reset_index(drop=True, inplace=True)
+
+    k_min_depth = vally_depth['vally_Ia'].values[:10]
+
+    density_curve = pd.DataFrame({'x_plot': x_plot,
+                                  'x_density': x_dens})
+    return density_curve, k_min_depth
+
+
 ##
 if __name__ == '__main__':
     ip_list = ['10.9.129.31', '10.9.129.30',
@@ -446,17 +545,20 @@ if __name__ == '__main__':
                '10.9.129.79', '10.9.130.75', '10.9.129.96']
 
     # 数据预处理
-    df_raw = pd.read_csv('./%s.csv' % ip_list[1])
+    df_raw = pd.read_csv('./%s.csv' % ip_list[0])
     data_raw_0 = load_data(df_raw)
+    day1_left = datetime(2018, 8, 17, 0, 0, 0) <= data_raw_0.TimeStr
+    day1_right = data_raw_0.TimeStr < datetime(2018, 8, 18, 0, 0, 0)
+    data_raw_0 = data_raw_0[day1_left & day1_right]
     data_raw_1 = fillin_timeseries(data_raw_0)
     data_raw_2 = fillin_missvalue(data_raw_1, 10)
-    data_raw_3 = fillin_missvalue(data_raw_2, 10)
+    data_raw_3 = fillin_missvalue(data_raw_2, 3)
     data_raw_3.fillna(-0.1, inplace=True)
     data_raw_3.reset_index(inplace=True, drop=True)
     first_diff_abs = abs(data_raw_3['Ia'].diff())
 
     # 首先进行切块
-    cut_points, idx = find_cut(first_diff_abs, 300, 0.05)
+    cut_points, idx = find_cut(first_diff_abs, 300, 0.04)
     data_0 = get_label(data_raw_3, cut_points)
 
     # 获取特征
@@ -480,44 +582,8 @@ if __name__ == '__main__':
     plot_cluster(data_4)
     plt.close()
 
-    # 根据"肘部图"获取最佳聚类个数, 不包括关机
-    # 因为数据本身是离散的，得手动加一些扰动项
-    grey = data_4.loc[(data_4['sum_label'] == 0) & (data_4['Ia'] > 0), ['Ia']]
-    grey['Ia'][grey['Ia'] > work_mean] = np.mean(grey['Ia'])
-    grey['Ia'] = grey['Ia'] + np.random.normal(0, 0.3, len(grey['Ia']))
-    distance, k = get_distance(grey)
-    plt.close()
-    best_n_cluster = get_elbow(distance)
+    density_curve, k_min_depth = cal_thre(data_4)
 
-    # 使用KMeans得到聚类中心, 并对数据做出预测, 画出图, 输出聚类器(work_mean, clf)
-    data_5, cluster_centers_, clf = use_km(data_4, grey, best_n_cluster, work_mean)
-    up_thre = work_mean
-    plot_km(data_5)
-    plt.hlines(cluster_centers_, 0, data_5.shape[0])
-    plt.close()
+    plt.plot(density_curve.x_plot, density_curve.x_density)
+    plt.vlines(k_min_depth, 0, np.max(density_curve.x_density), colors="red")
 
-    # 下面动态地判断待机的GMM中心, 可以调整get_idle的最后一个参数，其最大取值为best_n_cluster
-    data_6 = get_idle(data_5, cluster_centers_, 2)
-    plot_final(data_6)
-    plt.close()
-
-    # 这块存疑
-    up_thre = work_mean
-
-    # 基于聚类器(up_thre, clf)对原始数据(未经中值滤波处理)进行分类
-    data_raw_1_label = predict(data_raw_1, best_n_cluster, up_thre, clf)
-    plot_final(data_raw_1_label)
-    plt.hlines(up_thre, 0, data_raw_1_label.shape[0])
-    plt.close()
-
-    # 下面动态地判断待机的GMM中心, 可以调整get_idle的最后一个参数m，其最大取值为best_n_cluster
-    # 灰色关机，绿色待机，红色工作
-    default_m = np.sum(cluster_centers_ < 0.1) + 1
-    data_final = get_idle(data_raw_1_label, cluster_centers_, m=2)
-    plot_final(data_final)
-    plt.hlines(up_thre, 0, data_final.shape[0])
-    plt.close()
-
-    # 使用5分钟来过滤一下
-    data_final_2 = five_minutes_judge(data_final)
-    plot_final(data_final_2)
